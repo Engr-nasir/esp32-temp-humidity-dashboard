@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temperature and Humidity Monitor</title>
+<style>
+  :root { --bg:#e9eff2; --ink:#0f2f36; --muted:#5b7077; --panel:#fff; --line:#cddbe0;
+          --heat:#c9691a; --water:#1f6fa5; --ok:#2e7d4f; --bad:#b3402f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+         background:var(--bg); color:var(--ink); line-height:1.5; min-height:100vh; }
+  :focus-visible { outline:3px solid var(--water); outline-offset:2px; }
+
+  .bar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+         padding:20px 24px; max-width:960px; margin:0 auto; }
+  .bar h1 { font-size:1.25rem; margin:0; }
+  .right { display:flex; align-items:center; gap:14px; }
+  .status { font-size:.9rem; color:var(--muted); display:flex; align-items:center; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  .status.live .dot { background:var(--ok); }
+  .status.stale .dot { background:var(--bad); }
+  .ghost { border:1px solid var(--line); border-radius:8px; padding:8px 14px; color:var(--ink);
+           text-decoration:none; font-size:.95rem; }
+  .ghost:hover { background:#fff; }
+
+  .panels { display:grid; grid-template-columns:1fr 1fr; gap:20px; max-width:960px;
+            margin:0 auto; padding:4px 24px 20px; }
+  @media (max-width:680px) { .panels { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:24px; }
+  .panel h2 { font-size:1rem; font-weight:500; color:var(--muted); margin:0 0 12px; }
+  .reading { font-size:4.25rem; font-weight:700; line-height:1; letter-spacing:-.02em; }
+  .reading small { font-size:1.5rem; font-weight:500; margin-left:4px; color:var(--muted); letter-spacing:0; }
+  .temp .reading { color:var(--heat); }
+  .hum .reading { color:var(--water); }
+
+  .temp .body { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; }
+  .gauge { display:flex; gap:8px; align-items:flex-end; }
+  .tube { position:relative; width:26px; height:150px; border:2px solid var(--line);
+          border-radius:13px; background:#f5f8f9; overflow:hidden; flex:none; }
+  .tube .fill { position:absolute; left:0; right:0; bottom:0; height:0%; background:var(--heat);
+                transition:height .6s ease; }
+  .scale-v { display:flex; flex-direction:column; justify-content:space-between; height:150px;
+             font-size:.8rem; color:var(--muted); }
+
+  .track { margin-top:28px; height:16px; border-radius:8px; border:2px solid var(--line);
+           background:#f5f8f9; overflow:hidden; }
+  .track .fill { height:100%; width:0%; background:var(--water); transition:width .6s ease; }
+  .scale-h { display:flex; justify-content:space-between; font-size:.8rem; color:var(--muted); margin-top:6px; }
+
+  .recent { max-width:960px; margin:0 auto; padding:0 24px 40px; }
+  .recent .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px 24px; }
+  .recent h2 { font-size:1rem; font-weight:500; color:var(--muted); margin:0 0 10px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 4px; border-bottom:1px solid var(--line); }
+  th { font-weight:500; color:var(--muted); font-size:.9rem; }
+  tr:last-child td { border-bottom:0; }
+
+  @media (prefers-reduced-motion: reduce) { .tube .fill, .track .fill { transition:none; } }
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>Temperature and humidity</h1>
+  <div class="right">
+    <div id="status" class="status"><span class="dot"></span><span id="statusText">Waiting for data</span></div>
+    <a class="ghost" href="/logout">Sign out</a>
+  </div>
+</header>
+
+<section class="panels">
+  <article class="panel temp">
+    <h2>Temperature</h2>
+    <div class="body">
+      <div class="reading"><span id="temp">--</span><small>°C</small></div>
+      <div class="gauge">
+        <div class="scale-v"><span>50</span><span>25</span><span>0</span></div>
+        <div class="tube" aria-hidden="true"><div class="fill" id="tempFill"></div></div>
+      </div>
+    </div>
+  </article>
+
+  <article class="panel hum">
+    <h2>Humidity</h2>
+    <div class="reading"><span id="hum">--</span><small>%</small></div>
+    <div class="track" aria-hidden="true"><div class="fill" id="humFill"></div></div>
+    <div class="scale-h"><span>0%</span><span>50%</span><span>100%</span></div>
+  </article>
+</section>
+
+<section class="recent">
+  <div class="card">
+    <h2>Recent readings</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Temperature</th><th>Humidity</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="3">No readings yet.</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function setStatus(kind, text) {
+  $("status").className = "status " + kind;
+  $("statusText").textContent = text;
+}
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/latest");
+    if (res.status === 401) { window.location.href = "/login"; return; }
+    const d = await res.json();
+
+    if (d.temperature === null) {
+      setStatus("", "Waiting for data");
+      return;
+    }
+
+    $("temp").textContent = d.temperature.toFixed(0);
+    $("hum").textContent = d.humidity.toFixed(0);
+    $("tempFill").style.height = clamp(d.temperature / 50 * 100, 0, 100) + "%";
+    $("humFill").style.width = clamp(d.humidity, 0, 100) + "%";
+
+    if (d.age < 20) setStatus("live", "Live, updated " + d.age + "s ago");
+    else setStatus("stale", "No new data for " + d.age + "s. Check the device.");
+
+    if (d.history.length) {
+      $("rows").innerHTML = d.history.map(r =>
+        "<tr><td>" + r.time + "</td><td>" + r.temperature.toFixed(0) + " °C</td><td>" +
+        r.humidity.toFixed(0) + " %</td></tr>").join("");
+    }
+  } catch (e) {
+    setStatus("stale", "Cannot reach the server.");
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

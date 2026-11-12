@@ -1,0 +1,16 @@
+# Private settings (never upload these)
+config.py
+esp32_dht11_local/secrets.h
+
+# Data and Python files
+readings.csv
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor and system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
